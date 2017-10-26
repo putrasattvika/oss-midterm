@@ -1,0 +1,147 @@
+---
+
+- hosts: all
+  gather_facts: false   # don't gather facts yet in case if python 2 isn't installed yet
+  become: true
+
+  vars:
+    user: "{{ ansible_env.USER | default( 'ubuntu' ) }}"
+    packages:
+      - apache2
+      - dpkg-dev
+      - git
+      - mysql-server
+      - php5.6
+      - php5.6-cli
+      - php5.6-curl
+      - php5.6-dev
+      - php5.6-gd
+      - php5.6-json
+      - php5.6-mbstring
+      - php5.6-mysql
+      - unzip
+
+  pre_tasks:
+    - name: install python2 for Ansible if not installed
+      raw: test -e /usr/bin/python || (apt -y update && apt install -y python-minimal)
+      register: pyinstall_output
+      changed_when: pyinstall_output.stdout != ""
+
+    - setup: # this run gather_facts
+  
+  tasks:
+    # install dependencies
+    - name: add php5.6 PPA
+      apt_repository:
+        repo: 'ppa:ondrej/php'
+
+    - name: install packages
+      apt: name={{item}} state=installed update_cache=yes
+      with_items: 
+        - "{{ packages }}"
+
+    - name: enable apache2's rewrite mod
+      command: a2enmod rewrite
+
+    - name: enable apache2's headers mod
+      command: a2enmod headers
+
+    # - name: check php pcntl extension
+    #   command: php -r "echo extension_loaded('pcntl');"
+    #   register: havepcntl
+
+    # - name: install pcntl
+    #   shell: |
+    #     apt-get source php5 && \
+    #     PHP5=`ls -1F | grep '^php5-.*/$'` && \
+    #     (cd $PHP5/ext/pcntl && phpize && ./configure && make && sudo make install)
+    #   when: havepcntl != '1'
+
+    # clone Phabricator from github
+    - name: clone libphutil
+      git:
+        repo: 'https://github.com/phacility/libphutil.git'
+        dest: "{{vagrant.document_root}}/libphutil/"
+        clone: yes
+
+    - name: clone arcanist
+      git:
+        repo: 'https://github.com/phacility/arcanist.git'
+        dest: "{{vagrant.document_root}}/arcanist/"
+        clone: yes
+
+    - name: clone phabricator
+      git:
+        repo: 'https://github.com/phacility/phabricator.git'
+        dest: "{{vagrant.document_root}}/phabricator/"
+        clone: yes
+
+    # configure Phabricator database
+    - name: create phabricator DB user
+      shell: mysql -e "CREATE USER IF NOT EXISTS 'phabricator'@'localhost' IDENTIFIED BY 'phabricator';"
+    
+    - name: grant privileges for phabricator DB user
+      shell: mysql -e "GRANT ALL PRIVILEGES ON * . * TO 'phabricator'@'localhost'; FLUSH PRIVILEGES;";
+
+    # configure Phabricator settings
+        # configure Phabricator database
+    - name: config Phabricator's DB port
+      shell: ./bin/config set mysql.port 3306
+      args:
+        chdir: "{{vagrant.document_root}}/phabricator/"
+
+    - name: config Phabricator's DB user
+      shell: ./bin/config set mysql.user phabricator
+      args:
+        chdir: "{{vagrant.document_root}}/phabricator/"
+
+    - name: config Phabricator's DB password
+      shell: ./bin/config set mysql.pass phabricator
+      args:
+        chdir: "{{vagrant.document_root}}/phabricator/"
+
+    - name: init Phabricator's DB
+      shell: ./bin/storage upgrade --force
+      args:
+        chdir: "{{vagrant.document_root}}/phabricator/"
+
+    - name: config Phabricator's base URI
+      shell: "./bin/config set phabricator.base-uri 'http://{{vagrant.ip}}/'"
+      args:
+        chdir: "{{vagrant.document_root}}/phabricator/"
+
+    # configure apache2 virtualhost
+    - name: disable default apache2 virtualhost
+      file:
+        dest: /etc/apache2/sites-enabled/000-default.conf
+        state: absent
+
+    - name: create apache2 virtualhost config
+      template:
+        src: ../templates/phabricator.conf.j2
+        dest: /etc/apache2/sites-available/phabricator.conf
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: enable apache2 virtualhost config
+      file:
+        src: /etc/apache2/sites-available/phabricator.conf
+        dest: /etc/apache2/sites-enabled/phabricator.conf
+        owner: root
+        group: root
+        state: link
+
+    - name: restart apache2
+      service:
+        name: apache2
+        state: restarted
+
+    # add arcanist and phabricator-cli to $PATH
+    - name: add arcanist and phabricator-cli to $PATH
+      template:
+        src: ../templates/phabricator-path.sh.j2
+        dest: /etc/profile.d/phabricator-path.sh
+        owner: root
+        group: root
+        mode: 0644

@@ -1,0 +1,8 @@
+# Network
+hostname: phabricator.test
+ip: 192.168.100.32
+
+# Directories
+document_root: /var/www/html
+phabricator_plugin_folder: /var/www/html/phabricator/plugins
+synced_folder: plugins
