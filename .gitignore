@@ -1,2 +1,5 @@
 /.vagrant
+/plugins/*
+!/plugins/.dummy
+/**/*.log
 /**/*.retry
